@@ -21,7 +21,7 @@ $('play').onclick=async()=>{if(!chapters.length)return;if(playing){stop();return
 
 function drawLibrary(){let list=$('libraryList');list.replaceChildren();if(!library.length)list.textContent='No imported books yet.';for(let item of [...library].sort((a,b)=>a.title.localeCompare(b.title,undefined,{sensitivity:"base"}))){let b=document.createElement('button'), st={};try{st=JSON.parse(localStorage.getItem('sr02:'+item.id)||'{}')}catch{};b.textContent=item.title+(item.author?' — '+item.author:'')+' · Chapter '+((st.chapter||0)+1)+'/'+item.count+(item.id===identity?' · Open':'');if(item.id===identity){b.classList.add('activeBook');b.setAttribute('aria-current','true')}b.onclick=async()=>{if(busy)return;$('libraryDialog').close();if(item.id===identity)return;try{let f=await get('book:'+item.id);if(!f)throw Error('Book missing');await load(f,false)}catch(e){alert(e.message)}};let row=document.createElement('div');row.className='libraryRow';b.classList.add('bookChoice');let del=document.createElement('button');del.className='deleteBook';del.textContent='Remove';del.setAttribute('aria-label','Remove from library: '+item.title);del.onclick=()=>deleteBook(item);row.append(b,del);list.append(row)}}$('library').onclick=()=>{drawLibrary();$('libraryDialog').showModal()};$('libraryClose').onclick=()=>$('libraryDialog').close();$('libraryImport').onclick=()=>{$('libraryDialog').close();$('file').click()};addEventListener('pagehide',save);document.addEventListener('visibilitychange',()=>{if(document.hidden)save()});
 
-async function deleteBook(item){if(busy||!db)return;if(!confirm('Remove “'+item.title+'” from the library? Its imported copy, bookmarks and reading position will be removed. Your original file in Files will remain unchanged.'))return;busy=true;const active=item.id===identity;try{const next=library.filter(x=>x.id!==item.id);await new Promise((ok,no)=>{const t=db.transaction('files','readwrite'),os=t.objectStore('files');os.delete('book:'+item.id);os.delete('current');os.put(next,'library');if(active)os.delete('active');t.oncomplete=ok;t.onerror=()=>no(t.error);t.onabort=()=>no(t.error)});library=next;localStorage.removeItem('sr02:'+item.id);if(active){stop();clearTimeout(timer);layoutToken++;restoring=false;for(const u of urls)URL.revokeObjectURL(u);urls=[];assets.clear();chapters=[];invalidateSearch();cues=[];marks=[];identity='';title='';chapter=anchor=offset=page=soundChapter=soundAnchor=0;pages=1;windowStart=windowEnd=-1;document.body.classList.remove('paged');holder.id='holder';book.style.transform='';book.style.columnWidth='';book.innerHTML='<h1>Your Library</h1><p>Open Library to select or import a book.</p>'; $('title').textContent='SOUNDTRACK READER · 0.4.4';$('status').textContent='No book loaded';$('play').textContent='▶ Play';$('progress').value=0;$('percent').textContent='0.0%';$('links').replaceChildren();$('marks').replaceChildren();scrollTo(0,0)}drawLibrary()}catch(e){alert('Could not delete book: '+e.message)}finally{busy=false}}
+async function deleteBook(item){if(busy||!db)return;if(!confirm('Remove “'+item.title+'” from the library? Its imported copy, bookmarks and reading position will be removed. Your original file in Files will remain unchanged.'))return;busy=true;const active=item.id===identity;try{const next=library.filter(x=>x.id!==item.id);await new Promise((ok,no)=>{const t=db.transaction('files','readwrite'),os=t.objectStore('files');os.delete('book:'+item.id);os.delete('current');os.put(next,'library');if(active)os.delete('active');t.oncomplete=ok;t.onerror=()=>no(t.error);t.onabort=()=>no(t.error)});library=next;localStorage.removeItem('sr02:'+item.id);if(active){stop();clearTimeout(timer);layoutToken++;restoring=false;for(const u of urls)URL.revokeObjectURL(u);urls=[];assets.clear();chapters=[];invalidateSearch();cues=[];marks=[];identity='';title='';chapter=anchor=offset=page=soundChapter=soundAnchor=0;pages=1;windowStart=windowEnd=-1;document.body.classList.remove('paged');holder.id='holder';book.style.transform='';book.style.columnWidth='';book.innerHTML='<h1>Your Library</h1><p>Open Library to select or import a book.</p>'; $('title').textContent='SOUNDTRACK READER · 0.4.5';$('status').textContent='No book loaded';$('play').textContent='▶ Play';$('progress').value=0;$('percent').textContent='0.0%';$('links').replaceChildren();$('marks').replaceChildren();scrollTo(0,0)}drawLibrary()}catch(e){alert('Could not delete book: '+e.message)}finally{busy=false}}
 
 // Weight chapters by readable text, not chapter count. Interpolate within the current block.
 function buildProgressIndex(){progressTotal=0;progressIndex=chapters.map(c=>{let d=new DOMParser().parseFromString(c.html,'text/html'),bs=[...d.querySelectorAll('p,h1,h2,h3,h4,blockquote,li,pre')],prefix=[0];for(let b of bs){let n=b.textContent.trim().length;prefix.push(prefix.at(-1)+Math.max(1,n))}let length=Math.max(1,prefix.at(-1)),start=progressTotal;progressTotal+=length;return {start,length,prefix}})}
@@ -36,11 +36,14 @@ for(const id of ['libraryDialog','contents','prefs','searchDialog']){const d=$(i
 $('title').setAttribute('role','button');$('title').tabIndex=0;$('title').title='Go to start of current chapter';function chapterStart(){if(!chapters.length||busy)return;if(!restoring)position();render(0);sync()}$('title').addEventListener('click',chapterStart);$('title').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chapterStart()}});
 
 
-// v0.4.4: Case-insensitive full-book word/phrase search. Index only text, never audio.
+// v0.4.5: Case-insensitive full-book word/phrase search. Index only text, never audio.
 // Build on first use, in animation-frame slices to keep the iPhone responsive.
-let searchCorpus=null,searchCorpusBook='',searchRun=0;
+let searchCorpus=null,searchCorpusBook='',searchRun=0,searchOrigin=null,highlightTimer=0,highlightCleanup=0;
+function clearSearchHighlight(){clearTimeout(highlightTimer);clearTimeout(highlightCleanup);for(const m of book.querySelectorAll('mark.search-hit')){const p=m.parentNode;m.replaceWith(...m.childNodes);p.normalize()}}
+function expireSearchHighlight(){highlightTimer=setTimeout(()=>{for(const m of book.querySelectorAll('mark.search-hit'))m.classList.add('fading');highlightCleanup=setTimeout(clearSearchHighlight,550)},5000)}
+function refreshSearchReturn(){$('searchReturn').hidden=!(searchOrigin&&searchOrigin.id===identity&&searchOrigin.visited)}
 const SEARCH_MAX=200,SEARCH_BLOCKS='p,h1,h2,h3,h4,blockquote,li,pre';
-function invalidateSearch(){searchCorpus=null;searchCorpusBook='';searchRun++;$('searchResults').replaceChildren();$('searchStatus').textContent='Enter a word or phrase to find passages.'}
+function invalidateSearch(){searchOrigin=null;clearSearchHighlight();refreshSearchReturn();searchCorpus=null;searchCorpusBook='';searchRun++;$('searchResults').replaceChildren();$('searchStatus').textContent='Enter a word or phrase to find passages.'}
 function nextFrame(){return new Promise(resolve=>requestAnimationFrame(resolve))}
 async function searchData(token){
   if(searchCorpus&&searchCorpusBook===identity)return searchCorpus;
@@ -124,6 +127,7 @@ function markInBlock(block,start,length){
 }
 function jumpToMatch(hit){
   if(busy||!chapters[hit.chapter])return;
+  if(searchOrigin)searchOrigin.visited=true;refreshSearchReturn();clearSearchHighlight();
   $('searchDialog').close();searchRun++;
   lastGesture=Date.now();chapter=hit.chapter;
   render(hit.anchor);sync();
@@ -136,6 +140,7 @@ function jumpToMatch(hit){
     if(!target)return;
     const mark=markInBlock(target,hit.start,hit.length);
     if(!mark)return;
+    expireSearchHighlight();
     if($('paged').checked){
       const rect=mark.getClientRects()[0];
       if(rect){let x=rect.left-book.getBoundingClientRect().left;page=Math.max(0,Math.min(pages-1,Math.floor((x+1)/Math.max(1,holder.clientWidth))));book.style.transform='translateX('+-page*holder.clientWidth+'px)'}
@@ -150,6 +155,8 @@ function jumpToMatch(hit){
 }
 $('search').onclick=()=>{
   if(!chapters.length){$('status').textContent='Import a book before searching.';return}
+  if(!searchOrigin||searchOrigin.id!==identity||!searchOrigin.visited){if(!restoring&&!busy)position();searchOrigin={id:identity,chapter,anchor,offset,visited:false,page:$('paged').checked?page:null,pageWidth:holder.clientWidth,pageHeight:holder.clientHeight,typography:[$('size').value,$('leading').value,$('measure').value].join('|')}}
+  refreshSearchReturn();
   $('searchDialog').showModal();
   // Focus the text field, with no automatic scrolling of the reading page.
   $('searchText').focus({preventScroll:true});
@@ -157,3 +164,5 @@ $('search').onclick=()=>{
 $('searchForm').addEventListener('submit',findInBook);
 $('searchClose').onclick=()=>$('searchDialog').close();
 $('searchDialog').addEventListener('close',()=>{searchRun++;$('searchSubmit').disabled=false});
+
+$('searchReturn').onclick=()=>{const origin=searchOrigin;if(!origin||origin.id!==identity||busy)return;searchOrigin=null;refreshSearchReturn();clearSearchHighlight();$('searchDialog').close();lastGesture=Date.now();chapter=origin.chapter;savedPage=$('paged').checked&&Number.isInteger(origin.page)?origin:null;render(origin.anchor,origin.offset);sync()};
