@@ -43,7 +43,7 @@ function compactSectionLabel(raw,index){
  if(/^Prologue\b/i.test(name))return prefix+name.replace(/\s*\([^)]*\)\s*$/,'');
  return prefix+(name||'Section '+(index+1));
 }
-// v0.4.9: Short-lived per-chapter position memory, used only by the footer picker.
+// v0.4.91: Short-lived per-chapter position memory, used only by the footer picker.
 // No persistence, no new bookmarks, and never applied to ordinary page turns.
 const temporaryChapterPositions=new Map(),CHAPTER_RETURN_MS=90000;
 function captureTemporaryChapter(){
@@ -94,6 +94,23 @@ async function openLibraryBook(item){
  if(item.id===identity)return;
  try{const f=await get('book:'+item.id);if(!f)throw Error('Book missing');await load(f,false)}catch(e){alert(e.message)}
 }
+// v0.4.911: book actions are shared by touch long-press, right-click, and an accessible menu button.
+let shelfActionBook=null;
+function closeShelfActions(){
+ const d=$('shelfActions');if(d.open)d.close();shelfActionBook=null;
+}
+function openShelfActions(item){
+ if(busy)return;
+ shelfActionBook=item;
+ $('shelfActionTitle').textContent=item.title;
+ $('shelfActions').showModal();
+ $('shelfActionOpen').focus({preventScroll:true});
+}
+$('shelfActionClose').onclick=closeShelfActions;
+$('shelfActionOpen').onclick=()=>{const item=shelfActionBook;closeShelfActions();if(item)openLibraryBook(item)};
+$('shelfActionRemove').onclick=()=>{const item=shelfActionBook;closeShelfActions();if(item)deleteBook(item)};
+$('shelfActions').addEventListener('close',()=>shelfActionBook=null);
+$('shelfActions').addEventListener('click',e=>{if(e.target===$('shelfActions'))closeShelfActions()});
 function drawBookshelf(){
  const grid=$('shelfGrid');grid.replaceChildren();
  const sorted=[...library].sort((a,b)=>a.title.localeCompare(b.title,undefined,{sensitivity:'base'}));
@@ -108,10 +125,26 @@ function drawBookshelf(){
    const name=document.createElement('span');name.className='shelfCoverTitle';name.textContent=item.title;
    const author=document.createElement('span');author.className='shelfCoverAuthor';author.textContent=item.author||'Soundtrack Reader';
    cover.append(name,author);button.append(cover);
-   button.onclick=()=>openLibraryBook(item);
+   let holdTimer=null,origin=null,suppressUntil=0;
+   const clearHold=()=>{if(holdTimer!==null){clearTimeout(holdTimer);holdTimer=null}};
+   button.addEventListener('pointerdown',e=>{
+    if(e.pointerType==='mouse'&&e.button!==0)return;
+    clearHold();origin={x:e.clientX,y:e.clientY};
+    holdTimer=setTimeout(()=>{
+      holdTimer=null;suppressUntil=Date.now()+900;origin=null;
+      if(navigator.vibrate)navigator.vibrate(12);
+      openShelfActions(item);
+    },550);
+   });
+   button.addEventListener('pointermove',e=>{if(origin&&Math.hypot(e.clientX-origin.x,e.clientY-origin.y)>12){clearHold();origin=null}});
+   for(const type of ['pointerup','pointercancel','pointerleave'])button.addEventListener(type,()=>{clearHold();origin=null});
+   button.addEventListener('contextmenu',e=>{e.preventDefault();clearHold();suppressUntil=Date.now()+900;if(!$('shelfActions').open)openShelfActions(item)});
+   button.onclick=e=>{if(Date.now()<suppressUntil){e.preventDefault();return}openLibraryBook(item)};
    const label=document.createElement('div');label.className='shelfLabel';label.textContent=item.title;
    const detail=document.createElement('div');detail.className='shelfDetail';detail.textContent=item.author||'Unknown author';
-   card.append(button,label,detail);
+   const actions=document.createElement('button');actions.type='button';actions.className='shelfMore';actions.textContent='⋯';actions.title='Book actions';actions.setAttribute('aria-label','Actions for '+item.title);actions.onclick=()=>openShelfActions(item);
+   const caption=document.createElement('div');caption.className='shelfCaption';caption.append(label,actions);
+   card.append(button,caption,detail);
    if(item.id===identity){const now=document.createElement('span');now.className='shelfCurrent';now.textContent='✓ Currently reading';card.append(now)}
    grid.append(card);
  }
@@ -122,7 +155,7 @@ $('libraryShelfOpen').onclick=openBookshelf;
 $('shelfBack').onclick=closeBookshelf;
 $('shelfImport').onclick=()=>{closeBookshelf();$('file').click()};
 $('shelfLibrary').onclick=()=>{closeBookshelf();drawLibrary();$('libraryDialog').showModal()};
-async function deleteBook(item){if(busy||!db)return;if(!confirm('Remove “'+item.title+'” from the library? Its imported copy, bookmarks and reading position will be removed. Your original file in Files will remain unchanged.'))return;busy=true;const active=item.id===identity;try{const next=library.filter(x=>x.id!==item.id);await new Promise((ok,no)=>{const t=db.transaction('files','readwrite'),os=t.objectStore('files');os.delete('book:'+item.id);os.delete('current');os.put(next,'library');if(active)os.delete('active');t.oncomplete=ok;t.onerror=()=>no(t.error);t.onabort=()=>no(t.error)});library=next;localStorage.removeItem('sr02:'+item.id);if(active){stop();clearTimeout(timer);layoutToken++;restoring=false;for(const u of urls)URL.revokeObjectURL(u);urls=[];assets.clear();chapters=[];invalidateSearch();cues=[];marks=[];identity='';title='';chapter=anchor=offset=page=soundChapter=soundAnchor=0;pages=1;windowStart=windowEnd=-1;document.body.classList.remove('paged');holder.id='holder';book.style.transform='';book.style.columnWidth='';book.innerHTML='<h1>Your Library</h1><p>Open Library to select or import a book.</p>'; $('title').textContent='SOUNDTRACK READER · 0.4.9';$('status').textContent='No book loaded';temporaryChapterPositions.clear();$('chapterChoice').disabled=true;$('chapterChoice').textContent='Chapter —';$('play').textContent='▶ Play';$('progress').value=0;$('percent').textContent='0.0%';$('links').replaceChildren();$('marks').replaceChildren();scrollTo(0,0)}drawLibrary();if(!$('bookshelf').hidden)drawBookshelf()}catch(e){alert('Could not delete book: '+e.message)}finally{busy=false}}
+async function deleteBook(item){if(busy||!db)return;if(!confirm('Remove “'+item.title+'” from the library? Its imported copy, bookmarks and reading position will be removed. Your original file in Files will remain unchanged.'))return;busy=true;const active=item.id===identity;try{const next=library.filter(x=>x.id!==item.id);await new Promise((ok,no)=>{const t=db.transaction('files','readwrite'),os=t.objectStore('files');os.delete('book:'+item.id);os.delete('current');os.put(next,'library');if(active)os.delete('active');t.oncomplete=ok;t.onerror=()=>no(t.error);t.onabort=()=>no(t.error)});library=next;localStorage.removeItem('sr02:'+item.id);if(active){stop();clearTimeout(timer);layoutToken++;restoring=false;for(const u of urls)URL.revokeObjectURL(u);urls=[];assets.clear();chapters=[];invalidateSearch();cues=[];marks=[];identity='';title='';chapter=anchor=offset=page=soundChapter=soundAnchor=0;pages=1;windowStart=windowEnd=-1;document.body.classList.remove('paged');holder.id='holder';book.style.transform='';book.style.columnWidth='';book.innerHTML='<h1>Your Library</h1><p>Open Library to select or import a book.</p>'; $('title').textContent='SOUNDTRACK READER · 0.4.91';$('status').textContent='No book loaded';temporaryChapterPositions.clear();$('chapterChoice').disabled=true;$('chapterChoice').textContent='Chapter —';$('play').textContent='▶ Play';$('progress').value=0;$('percent').textContent='0.0%';$('links').replaceChildren();$('marks').replaceChildren();scrollTo(0,0)}drawLibrary();if(!$('bookshelf').hidden)drawBookshelf()}catch(e){alert('Could not delete book: '+e.message)}finally{busy=false}}
 
 // Weight chapters by readable text, not chapter count. Interpolate within the current block.
 function buildProgressIndex(){progressTotal=0;progressIndex=chapters.map(c=>{let d=new DOMParser().parseFromString(c.html,'text/html'),bs=[...d.querySelectorAll('p,h1,h2,h3,h4,blockquote,li,pre')],prefix=[0];for(let b of bs){let n=b.textContent.trim().length;prefix.push(prefix.at(-1)+Math.max(1,n))}let length=Math.max(1,prefix.at(-1)),start=progressTotal;progressTotal+=length;return {start,length,prefix}})}
@@ -137,7 +170,7 @@ for(const id of ['libraryDialog','contents','prefs','searchDialog','chapterDialo
 $('title').setAttribute('role','button');$('title').tabIndex=0;$('title').title='Go to start of current chapter';function chapterStart(){if(!chapters.length||busy)return;if(!restoring)position();render(0);sync()}$('title').addEventListener('click',chapterStart);$('title').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chapterStart()}});
 
 
-// v0.4.9: Case-insensitive full-book word/phrase search. Index only text, never audio.
+// v0.4.91: Case-insensitive full-book word/phrase search. Index only text, never audio.
 // Build on first use, in animation-frame slices to keep the iPhone responsive.
 let searchCorpus=null,searchCorpusBook='',searchRun=0,searchOrigin=null,highlightTimer=0,highlightCleanup=0;
 function clearSearchHighlight(){clearTimeout(highlightTimer);clearTimeout(highlightCleanup);for(const m of book.querySelectorAll('mark.search-hit')){const p=m.parentNode;m.replaceWith(...m.childNodes);p.normalize()}}
