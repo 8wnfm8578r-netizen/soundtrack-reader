@@ -43,7 +43,7 @@ function compactSectionLabel(raw,index){
  if(/^Prologue\b/i.test(name))return prefix+name.replace(/\s*\([^)]*\)\s*$/,'');
  return prefix+(name||'Section '+(index+1));
 }
-// v0.4.8: Short-lived per-chapter position memory, used only by the footer picker.
+// v0.4.9: Short-lived per-chapter position memory, used only by the footer picker.
 // No persistence, no new bookmarks, and never applied to ordinary page turns.
 const temporaryChapterPositions=new Map(),CHAPTER_RETURN_MS=90000;
 function captureTemporaryChapter(){
@@ -84,9 +84,45 @@ $('chapterChoice').onclick=()=>{
 };
 $('chapterClose').onclick=()=>$('chapterDialog').close();
 
-function drawLibrary(){let list=$('libraryList');list.replaceChildren();if(!library.length)list.textContent='No imported books yet.';for(let item of [...library].sort((a,b)=>a.title.localeCompare(b.title,undefined,{sensitivity:"base"}))){let b=document.createElement('button'), st={};try{st=JSON.parse(localStorage.getItem('sr02:'+item.id)||'{}')}catch{};b.textContent=item.title+(item.author?' — '+item.author:'')+' · Chapter '+((st.chapter||0)+1)+'/'+item.count+(item.id===identity?' · Open':'');if(item.id===identity){b.classList.add('activeBook');b.setAttribute('aria-current','true')}b.onclick=async()=>{if(busy)return;$('libraryDialog').close();if(item.id===identity)return;try{let f=await get('book:'+item.id);if(!f)throw Error('Book missing');await load(f,false)}catch(e){alert(e.message)}};let row=document.createElement('div');row.className='libraryRow';b.classList.add('bookChoice');let del=document.createElement('button');del.className='deleteBook';del.textContent='Remove';del.setAttribute('aria-label','Remove from library: '+item.title);del.onclick=()=>deleteBook(item);row.append(b,del);list.append(row)}}$('library').onclick=()=>{drawLibrary();$('libraryDialog').showModal()};$('libraryClose').onclick=()=>$('libraryDialog').close();$('libraryImport').onclick=()=>{$('libraryDialog').close();$('file').click()};addEventListener('pagehide',save);document.addEventListener('visibilitychange',()=>{if(document.hidden)save()});
+function drawLibrary(){let list=$('libraryList');list.replaceChildren();if(!library.length)list.textContent='No imported books yet.';for(let item of [...library].sort((a,b)=>a.title.localeCompare(b.title,undefined,{sensitivity:"base"}))){let b=document.createElement('button'), st={};try{st=JSON.parse(localStorage.getItem('sr02:'+item.id)||'{}')}catch{};b.textContent=item.title+(item.author?' — '+item.author:'')+' · Chapter '+((st.chapter||0)+1)+'/'+item.count+(item.id===identity?' · Open':'');if(item.id===identity){b.classList.add('activeBook');b.setAttribute('aria-current','true')}b.onclick=()=>openLibraryBook(item);let row=document.createElement('div');row.className='libraryRow';b.classList.add('bookChoice');let del=document.createElement('button');del.className='deleteBook';del.textContent='Remove';del.setAttribute('aria-label','Remove from library: '+item.title);del.onclick=()=>deleteBook(item);row.append(b,del);list.append(row)}}$('library').onclick=()=>{drawLibrary();$('libraryDialog').showModal()};$('libraryClose').onclick=()=>$('libraryDialog').close();$('libraryImport').onclick=()=>{$('libraryDialog').close();$('file').click()};addEventListener('pagehide',save);document.addEventListener('visibilitychange',()=>{if(document.hidden)save()});
 
-async function deleteBook(item){if(busy||!db)return;if(!confirm('Remove “'+item.title+'” from the library? Its imported copy, bookmarks and reading position will be removed. Your original file in Files will remain unchanged.'))return;busy=true;const active=item.id===identity;try{const next=library.filter(x=>x.id!==item.id);await new Promise((ok,no)=>{const t=db.transaction('files','readwrite'),os=t.objectStore('files');os.delete('book:'+item.id);os.delete('current');os.put(next,'library');if(active)os.delete('active');t.oncomplete=ok;t.onerror=()=>no(t.error);t.onabort=()=>no(t.error)});library=next;localStorage.removeItem('sr02:'+item.id);if(active){stop();clearTimeout(timer);layoutToken++;restoring=false;for(const u of urls)URL.revokeObjectURL(u);urls=[];assets.clear();chapters=[];invalidateSearch();cues=[];marks=[];identity='';title='';chapter=anchor=offset=page=soundChapter=soundAnchor=0;pages=1;windowStart=windowEnd=-1;document.body.classList.remove('paged');holder.id='holder';book.style.transform='';book.style.columnWidth='';book.innerHTML='<h1>Your Library</h1><p>Open Library to select or import a book.</p>'; $('title').textContent='SOUNDTRACK READER · 0.4.8';$('status').textContent='No book loaded';temporaryChapterPositions.clear();$('chapterChoice').disabled=true;$('chapterChoice').textContent='Chapter —';$('play').textContent='▶ Play';$('progress').value=0;$('percent').textContent='0.0%';$('links').replaceChildren();$('marks').replaceChildren();scrollTo(0,0)}drawLibrary()}catch(e){alert('Could not delete book: '+e.message)}finally{busy=false}}
+
+async function openLibraryBook(item){
+ if(busy)return;
+ if($('libraryDialog').open)$('libraryDialog').close();
+ closeBookshelf();
+ if(item.id===identity)return;
+ try{const f=await get('book:'+item.id);if(!f)throw Error('Book missing');await load(f,false)}catch(e){alert(e.message)}
+}
+function drawBookshelf(){
+ const grid=$('shelfGrid');grid.replaceChildren();
+ const sorted=[...library].sort((a,b)=>a.title.localeCompare(b.title,undefined,{sensitivity:'base'}));
+ if(!sorted.length){const msg=document.createElement('p');msg.className='shelfEmpty';msg.textContent='Your library is empty. Import an EPUB or soundtrack package to begin.';grid.append(msg)}
+ const colors=['#594153','#42536c','#5d624e','#654c43','#3e6160','#655c78','#695342','#45536a'];
+ for(const item of sorted){
+   const card=document.createElement('article');card.className='shelfItem';
+   const button=document.createElement('button');button.type='button';button.className='shelfSelect';button.setAttribute('aria-label','Open '+item.title);
+   const cover=document.createElement('div');cover.className='shelfCover';
+   let hash=0;for(const ch of item.id)hash=(hash*31+ch.charCodeAt(0))|0;
+   cover.style.setProperty('--cover',colors[Math.abs(hash%colors.length)]);
+   const name=document.createElement('span');name.className='shelfCoverTitle';name.textContent=item.title;
+   const author=document.createElement('span');author.className='shelfCoverAuthor';author.textContent=item.author||'Soundtrack Reader';
+   cover.append(name,author);button.append(cover);
+   button.onclick=()=>openLibraryBook(item);
+   const label=document.createElement('div');label.className='shelfLabel';label.textContent=item.title;
+   const detail=document.createElement('div');detail.className='shelfDetail';detail.textContent=item.author||'Unknown author';
+   card.append(button,label,detail);
+   if(item.id===identity){const now=document.createElement('span');now.className='shelfCurrent';now.textContent='✓ Currently reading';card.append(now)}
+   grid.append(card);
+ }
+}
+function openBookshelf(){if(busy)return;drawBookshelf();if($('libraryDialog').open)$('libraryDialog').close();$('bookshelf').hidden=false;document.body.classList.add('shelf-open');$('bookshelf').scrollTop=0;$('shelfBack').focus({preventScroll:true})}
+function closeBookshelf(){if($('bookshelf').hidden)return;$('bookshelf').hidden=true;document.body.classList.remove('shelf-open')}
+$('libraryShelfOpen').onclick=openBookshelf;
+$('shelfBack').onclick=closeBookshelf;
+$('shelfImport').onclick=()=>{closeBookshelf();$('file').click()};
+$('shelfLibrary').onclick=()=>{closeBookshelf();drawLibrary();$('libraryDialog').showModal()};
+async function deleteBook(item){if(busy||!db)return;if(!confirm('Remove “'+item.title+'” from the library? Its imported copy, bookmarks and reading position will be removed. Your original file in Files will remain unchanged.'))return;busy=true;const active=item.id===identity;try{const next=library.filter(x=>x.id!==item.id);await new Promise((ok,no)=>{const t=db.transaction('files','readwrite'),os=t.objectStore('files');os.delete('book:'+item.id);os.delete('current');os.put(next,'library');if(active)os.delete('active');t.oncomplete=ok;t.onerror=()=>no(t.error);t.onabort=()=>no(t.error)});library=next;localStorage.removeItem('sr02:'+item.id);if(active){stop();clearTimeout(timer);layoutToken++;restoring=false;for(const u of urls)URL.revokeObjectURL(u);urls=[];assets.clear();chapters=[];invalidateSearch();cues=[];marks=[];identity='';title='';chapter=anchor=offset=page=soundChapter=soundAnchor=0;pages=1;windowStart=windowEnd=-1;document.body.classList.remove('paged');holder.id='holder';book.style.transform='';book.style.columnWidth='';book.innerHTML='<h1>Your Library</h1><p>Open Library to select or import a book.</p>'; $('title').textContent='SOUNDTRACK READER · 0.4.9';$('status').textContent='No book loaded';temporaryChapterPositions.clear();$('chapterChoice').disabled=true;$('chapterChoice').textContent='Chapter —';$('play').textContent='▶ Play';$('progress').value=0;$('percent').textContent='0.0%';$('links').replaceChildren();$('marks').replaceChildren();scrollTo(0,0)}drawLibrary();if(!$('bookshelf').hidden)drawBookshelf()}catch(e){alert('Could not delete book: '+e.message)}finally{busy=false}}
 
 // Weight chapters by readable text, not chapter count. Interpolate within the current block.
 function buildProgressIndex(){progressTotal=0;progressIndex=chapters.map(c=>{let d=new DOMParser().parseFromString(c.html,'text/html'),bs=[...d.querySelectorAll('p,h1,h2,h3,h4,blockquote,li,pre')],prefix=[0];for(let b of bs){let n=b.textContent.trim().length;prefix.push(prefix.at(-1)+Math.max(1,n))}let length=Math.max(1,prefix.at(-1)),start=progressTotal;progressTotal+=length;return {start,length,prefix}})}
@@ -101,7 +137,7 @@ for(const id of ['libraryDialog','contents','prefs','searchDialog','chapterDialo
 $('title').setAttribute('role','button');$('title').tabIndex=0;$('title').title='Go to start of current chapter';function chapterStart(){if(!chapters.length||busy)return;if(!restoring)position();render(0);sync()}$('title').addEventListener('click',chapterStart);$('title').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chapterStart()}});
 
 
-// v0.4.8: Case-insensitive full-book word/phrase search. Index only text, never audio.
+// v0.4.9: Case-insensitive full-book word/phrase search. Index only text, never audio.
 // Build on first use, in animation-frame slices to keep the iPhone responsive.
 let searchCorpus=null,searchCorpusBook='',searchRun=0,searchOrigin=null,highlightTimer=0,highlightCleanup=0;
 function clearSearchHighlight(){clearTimeout(highlightTimer);clearTimeout(highlightCleanup);for(const m of book.querySelectorAll('mark.search-hit')){const p=m.parentNode;m.replaceWith(...m.childNodes);p.normalize()}}
